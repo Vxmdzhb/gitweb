@@ -1,12 +1,12 @@
-//! The shared, **fully deterministic** git fixture used by the `gitcmd` tests.
+//! The shared, **fully deterministic** git fixture used by the `gitcmd`
+//! tests.
 //!
-//! The recipe mirrors `build_fixture()` in `tests/regen_gitcmd_goldens.py` line
-//! for line: same content, same fixed identity and `GIT_AUTHOR_DATE` /
-//! `GIT_COMMITTER_DATE`, so every object id is stable and can be embedded as a
-//! golden. `fixture_shas()` returns the six commit ids the generator printed;
-//! `build()` asserts the repository it just created has exactly those ids, so a
-//! drift between the two recipes fails loudly rather than silently comparing
-//! different repositories.
+//! The recipe follows `build_fixture()` in `tests/regen_gitcmd_goldens.py`
+//! line for line: same content, same fixed identity and
+//! `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE`, so every object id is stable enough
+//! to embed in a golden. `fixture_shas()` returns the six commit ids the
+//! generator printed, and `build()` asserts the new repository has exactly
+//! those, so the two recipes can't drift apart unnoticed.
 
 #![allow(dead_code)]
 

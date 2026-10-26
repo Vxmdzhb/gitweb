@@ -81,8 +81,8 @@ pub struct Credential {
     pub stored: String,
 }
 
-/// A malformed `--auth` spec. Reported (rather than ignored) so a typo fails
-/// loudly at startup instead of silently disabling access control.
+/// A malformed `--auth` spec. Reported rather than ignored, so a typo stops
+/// the server at startup instead of switching access control off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuthSpecError(&'static str);
 
@@ -126,9 +126,8 @@ pub fn parse_auth_spec(spec: &str) -> Result<Option<Credential>, AuthSpecError> 
     if parts.len() != 3 || parts[0] != SCHEME {
         return Err(BAD_PW);
     }
-    // A present-but-empty salt or hash would parse yet lock everyone out
-    // (`verify_password` rejects an empty digest), silently bricking access
-    // control. Fail loudly at parse time instead.
+    // A present but empty salt or hash would parse and then lock everyone out
+    // (`verify_password` rejects an empty digest). Refuse it here instead.
     if parts[1].is_empty() || parts[2].is_empty() {
         return Err(BAD_PARTS);
     }

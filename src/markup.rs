@@ -1,44 +1,37 @@
-//! HTML-safe rendering helpers: escaping, dates, minimal Markdown, diff parsing.
+//! HTML-safe rendering helpers: escaping, dates, minimal Markdown, diff
+//! parsing.
 //!
-//! The guiding rule for anything in this module is *escape first*. Every
-//! function that turns untrusted repository content into HTML runs it through
-//! [`esc`] before applying any structure, so a value can never inject markup.
-//! The Markdown renderer only re-introduces a fixed, safe subset of tags onto
-//! already-escaped text.
+//! The rule here is *escape first*. Every function that turns repository
+//! content into HTML runs it through [`esc`] before adding any structure, so a
+//! value can never inject markup. The Markdown renderer only adds a fixed,
+//! safe set of tags around already-escaped text.
 //!
-//! A faithful port of the Python `gitweb.markup`, cross-checked byte-identical
-//! in `tests/xcheck_markup.rs`. The Python module leans on `re`; every pattern
-//! is reproduced here as a hand-rolled linear scan (no regex crate, matching the
-//! rest of the suite), including the greedy/lazy and backtracking semantics that
-//! decide whether a construct matches at all. Because Python's `re` counts
-//! *code points*, every bounded span (`{1,512}`) and the
-//! [`MAX_MARKDOWN_BYTES`] cap (which, despite its name, is `len(str)` in Python)
-//! are measured in `char`s here too.
+//! A port of the Python `gitweb.markup`, cross-checked byte for byte in
+//! `tests/xcheck_markup.rs`. The Python module uses `re`; each pattern is
+//! reproduced here as a hand-written linear scan (no regex crate, like the rest
+//! of the suite), including the greedy, lazy and backtracking behaviour that
+//! decides whether a construct matches. Python's `re` counts *code points*, so
+//! every bounded span (`{1,512}`) and the [`MAX_MARKDOWN_BYTES`] cap (which,
+//! despite its name, is `len(str)` in Python) are measured in `char`s here.
 //!
-//! # Documented divergences
+//! # Differences from the Python version
 //!
-//! * **Ordered-list markers**: Python's `\d` matches every Unicode decimal digit
-//!   (general category `Nd`); the stdlib exposes no `Nd` table, so an ordered
-//!   list marker here must use ASCII digits. Every other `\d`/`\w`/`\s` class is
+//! * **Ordered-list markers**: Python's `\d` matches every Unicode decimal
+//!   digit (category `Nd`); the standard library has no `Nd` table, so here a
+//!   list marker must use ASCII digits. Every other `\d`/`\w`/`\s` class is
 //!   reproduced exactly (see [`crate::pycompat`]).
-//! * **`highlight_source` is not ported.** In Python it is an optional Pygments
-//!   hook that returns `None` — the escaped-plaintext fallback — whenever
-//!   Pygments is absent, which is always the case in the zero-dependency
-//!   deployment this crate targets. There is no Rust equivalent to add, so the
-//!   blob view simply renders the (identical) fallback.
-//! * **An indented ATX heading no longer hangs.** `render_markdown("  # x")`
-//!   *never returns* in the Python reference: an ATX heading is only recognised
-//!   at column 0, but the paragraph terminator `^\s*(#{1,6}\s|…)` fires on the
-//!   indented form, so the paragraph loop consumes no line, `i` is never
-//!   advanced, and the `while i < n` loop spins forever emitting `<p></p>`. On
-//!   a network-facing renderer that is a one-request denial of service, so it
-//!   is fixed here: when the paragraph scan consumes nothing, the offending
-//!   line is taken as a one-line paragraph and `i` advances. The guard is inert
-//!   for every input on which the Python reference terminates — the paragraph
-//!   scan can only come up empty on exactly that hang — so byte-identity is
-//!   unaffected. (Only an *indented* `#{1,6}` + whitespace triggers it;
-//!   `  #x`, `  ####### x`, indented lists/quotes/fences and `  # x` followed
-//!   by a setext underline all terminate in Python and are matched exactly.)
+//! * **`highlight_source` is not ported.** In Python it's an optional Pygments
+//!   hook that returns `None` (the escaped plain-text fallback) whenever
+//!   Pygments is missing, which it always is here. The blob view renders that
+//!   same fallback.
+//! * **An indented ATX heading doesn't hang.** In the Python version
+//!   `render_markdown("  # x")` never returns: a heading is only recognised at
+//!   column 0, but the paragraph terminator `^\s*(#{1,6}\s|…)` fires on the
+//!   indented form, so the paragraph loop consumes nothing and spins forever.
+//!   On a network-facing renderer that's a one-request denial of service, so
+//!   here a paragraph scan that consumes nothing takes the line as a one-line
+//!   paragraph and moves on. That can only happen on exactly the input where
+//!   Python hangs, so byte-identity is unaffected everywhere else.
 
 use crate::pycompat::{
     expandtabs, gmtime, html_escape, is_space, is_word, lstrip, rstrip, rstrip_chars, strip,

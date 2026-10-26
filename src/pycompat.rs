@@ -1,24 +1,24 @@
-//! CPython-compatible primitives — the byte-identity substrate of the port.
+//! CPython-compatible primitives: what byte-identity with the Python version
+//! rests on.
 //!
-//! Every escaped fragment, stripped string and rendered date in `gitweb` has to
-//! come out byte-identical to the Python reference, and Rust's stdlib differs
-//! from CPython in small ways that would silently corrupt a golden:
+//! Every escaped fragment, stripped string and rendered date in `gitweb` must
+//! match the Python reference byte for byte, and Rust's standard library
+//! differs from CPython in small ways:
 //!
 //! * `str.strip()`/`str.split()` and `re`'s `\s` treat the four C0 separators
-//!   `\x1c`–`\x1f` as whitespace; [`char::is_whitespace`] does not.
-//! * `str.expandtabs(4)` (which `render_markdown` uses to measure list-item
-//!   indentation) advances to the next tab stop and resets the column on
-//!   `\n`/`\r`; there is no stdlib equivalent.
-//! * `str.split(None, 1)` splits on a *run* of whitespace and keeps the rest of
-//!   the string verbatim (trailing whitespace included), unlike
-//!   [`str::splitn`] on a single separator.
-//! * `time.strftime("%Y-…", time.gmtime(ts))` renders the year *unpadded*
+//!   `\x1c`–`\x1f` as whitespace; [`char::is_whitespace`] doesn't.
+//! * `str.expandtabs(4)` (used by `render_markdown` to measure list
+//!   indentation) moves to the next tab stop and resets the column on
+//!   `\n`/`\r`; there's no standard equivalent.
+//! * `str.split(None, 1)` splits on a *run* of whitespace and keeps the rest
+//!   as is (trailing whitespace included), unlike [`str::splitn`] on one
+//!   separator.
+//! * `time.strftime("%Y-…", time.gmtime(ts))` doesn't pad the year
 //!   (`gmtime(-62135596800)` → `1-01-01`) and accepts negative timestamps.
 //!
-//! Everything here is `pub(crate)` — an implementation detail of the port, not
-//! part of the crate's API. It deliberately mirrors the equivalent private
-//! module in `suitedash` so the two crates behave identically; there is no
-//! cross-crate dependency between them.
+//! Everything here is `pub(crate)`: part of the port, not of the API.
+//! `suitedash` has a matching private module, so both behave the same without
+//! depending on each other.
 
 /// Python's whitespace class (`str.strip()`, `str.split()`, `re`'s `\s`):
 /// Unicode `White_Space` plus the C0 separators `\x1c`–`\x1f`.

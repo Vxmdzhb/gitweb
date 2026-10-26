@@ -922,10 +922,10 @@ impl Server {
     /// Build a server from `config`, resolving the root and the credential.
     ///
     /// The root is canonicalised (and must be a directory) and the mount prefix
-    /// normalised, exactly as the reference's `make_server` does. A malformed
-    /// `--auth`/`--auth-file`, or one that yields no usable credential after the
-    /// operator asked for access control, is refused **here** rather than
-    /// silently serving with the gate open.
+    /// normalised, as the reference's `make_server` does. A malformed
+    /// `--auth`/`--auth-file`, or one that gives no usable credential when access
+    /// control was asked for, is refused **here**, never served with the gate
+    /// open.
     ///
     /// # Errors
     /// The message the reference raises as `SystemExit`.
@@ -2394,13 +2394,12 @@ fn param_or<'a>(params: &'a [(String, String)], key: &str, default: &'a str) -> 
         .map_or(default, |(_, v)| v.as_str())
 }
 
-/// A 1-based `page` query parameter (defaulting to 1, never below it).
+/// A 1-based `page` query parameter (default 1, never below it).
 ///
-/// Python's `int()` has no width limit, so a caller can name page
-/// `10**30` and the reference clamps it to the last page. An integer literal
-/// that overflows here therefore saturates rather than silently meaning "page
-/// 1"; anything that is not an integer at all falls back to 1, as `int()`
-/// raising `ValueError` does.
+/// Python's `int()` has no width limit, so a page like `10**30` is clamped to
+/// the last page there. Here an integer that overflows saturates the same way
+/// instead of meaning page 1; anything that isn't an integer falls back to 1,
+/// as `int()` raising `ValueError` does.
 fn page_param(params: &[(String, String)]) -> usize {
     let raw = param(params, "page");
     let raw = if raw.is_empty() { "1" } else { raw };

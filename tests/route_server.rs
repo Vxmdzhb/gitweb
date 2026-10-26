@@ -654,7 +654,7 @@ fn tree_and_blob_redirect_to_each_other_for_the_wrong_object_type() {
         to_tree.header("Location"),
         Some("/xrepo/tree?ref=main&path=src")
     );
-    // Under a prefix the redirect keeps the mount point.
+    // With a prefix, the redirect keeps the mount point.
     let prefixed = Server::new(Config {
         url_prefix: "/git".to_string(),
         ..Config::new(&fx.root)
@@ -1046,7 +1046,7 @@ fn a_requested_but_unusable_credential_refuses_to_start() {
         Some("bob".to_string())
     );
 
-    // A root that is not a directory is refused too.
+    // A root that isn't a directory is refused as well.
     assert!(Server::new(Config::new(fx.root.join("nope")))
         .expect_err("must refuse")
         .contains("root is not a directory"));
@@ -1245,8 +1245,8 @@ fn head_requests_route_exactly_like_get() {
 #[test]
 fn git_error_variants_map_onto_the_reference_statuses() {
     let Some((fx, srv)) = open() else { return };
-    // The mapping is exercised through the routes above; assert the shape here
-    // so a future variant cannot silently become a 200.
+    // The mapping is exercised through the routes above; check the shape here so
+    // a new variant can't quietly become a 200.
     for (err, want) in [
         (GitError::BadRequest("x".to_string()), 400u16),
         (GitError::NotFound("x".to_string()), 404),

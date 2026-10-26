@@ -109,9 +109,9 @@ jobs:
         with:
           command: check advisories
 
-  # gitweb shells out to `git` and parses what comes back, so the installed git
-  # is part of its contract. This caught a real regression: `%aI` renders a
-  # zero UTC offset as `+00:00` up to 2.43 and as `Z` after it.
+  # gitweb runs `git` and parses its output, so the installed git is part of
+  # its contract. For example, `%aI` renders a zero UTC offset as `+00:00` up
+  # to git 2.43 and as `Z` after it.
   git-versions:
     name: gitweb vs git ${{ matrix.git }}
     runs-on: ubuntu-latest

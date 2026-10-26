@@ -1,100 +1,97 @@
-//! Read-only git plumbing — the argv-only, root-confined `git` exec tier.
+//! Read-only git plumbing: the argv-only, root-confined `git` exec tier.
 //!
-//! Every function here shells out to the `git` binary through
-//! [`std::process::Command`] with an explicit **argument vector**; there is no
+//! Every function here runs the `git` binary through
+//! [`std::process::Command`] with an explicit **argument vector**. There is no
 //! shell anywhere in this module, so a branch, path, ref or search term
-//! containing `;`, `|`, `` ` ``, `$(…)` or a newline is inert data. Nothing in
+//! containing `;`, `|`, `` ` ``, `$(…)` or a newline is just data. Nothing
 //! here writes to a repository.
 //!
-//! # The confinement invariant
+//! # Confinement
 //!
-//! The crown-jewel property is: *git only ever runs against a directory that a
-//! validator proved is a direct child of the configured root, and every
-//! URL-derived value reaching an argv slot has been through its validator.*
-//! It is modelled in the types rather than left to caller discipline (the same
-//! technique as `websearch::SafeIp` and `onioncrawler::OnionHost`):
+//! The key property: *git only ever runs in a directory a validator proved is
+//! a direct child of the configured root, and every value from the URL that
+//! reaches an argv slot has been through its validator.* It's encoded in the
+//! types rather than left to callers (like `websearch::SafeIp` and
+//! `onioncrawler::OnionHost`):
 //!
-//! * [`RepoPath`] wraps the canonicalised repository directory and has **no
-//!   public constructor**. The only way to obtain one is [`resolve_repo`] /
+//! * [`RepoPath`] wraps the canonical repository directory and has **no
+//!   public constructor**. The only way to get one is [`resolve_repo`] /
 //!   [`discover_repos`], which canonicalise the root and the candidate and
-//!   require `parent(candidate) == realpath(root)` — so `..`, an absolute
-//!   path, and a symlink pointing outside the root are all rejected before any
-//!   process is spawned. Every git invocation in this module takes a
-//!   `&RepoPath`, so "git ran outside the root" is unrepresentable.
+//!   require `parent(candidate) == realpath(root)`, so `..`, an absolute path
+//!   or a symlink out of the root is rejected before any process starts. Every
+//!   git call here takes a `&RepoPath`, so running git outside the root can't
+//!   be expressed.
 //! * [`RepoName`], [`SafeRef`], [`SafePath`], [`SafeQuery`] and [`RefPattern`]
 //!   are validated newtypes over the Python `valid_repo_name` / `valid_ref` /
-//!   `valid_path` / `valid_query` predicates (still exported as
+//!   `valid_path` / `valid_query` predicates (also exported as
 //!   [`valid_repo_name`], [`valid_ref`], [`valid_path`], [`valid_query`]).
 //!   Their `parse` constructors are the only way to build one, so a value that
-//!   is option-like (`-…`, `--upload-pack=…`), traversing (`..`), NUL-bearing
-//!   or control-bearing can never reach an argv slot.
-//! * A ref/pathspec is always separated from the options with `--`, and every
-//!   value that is not separable that way is *glued* into a single argv element
-//!   (`--grep=<query>`, `--prefix=<prefix>`, `--format=<fmt>`) where git can
-//!   only read it as that option's operand.
-//! * [`run_git`] re-checks `args[0]` against [`ALLOWED_SUBCOMMANDS`] — the last
-//!   line of defence: even a bug that let a caller pass an arbitrary
-//!   sub-command could only ever run a read-only one. `receive-pack` (push) is
-//!   deliberately absent and must never be added.
-//! * Every child is spawned with the config/env hardening: `--no-pager`,
+//!   looks like an option (`-…`, `--upload-pack=…`), traverses (`..`), or
+//!   holds NUL or control characters never reaches an argv slot.
+//! * A ref or pathspec is always separated from the options with `--`, and
+//!   any value that can't be separated that way is *glued* into one argv
+//!   element (`--grep=<query>`, `--prefix=<prefix>`, `--format=<fmt>`), where
+//!   git can only read it as that option's value.
+//! * [`run_git`] checks `args[0]` against [`ALLOWED_SUBCOMMANDS`] as a last
+//!   line of defence: even a bug that passed an arbitrary subcommand could only
+//!   run a read-only one. `receive-pack` (push) is not there and must never be.
+//! * Every child gets the same hardening: `--no-pager`,
 //!   `-c safe.directory=*`, `-c log.showSignature=false`,
-//!   `-c core.quotePath=false`, `GIT_TERMINAL_PROMPT=0`, global/system config
-//!   redirected to the null device, and `GIT_DIR`/`GIT_WORK_TREE`/
-//!   `GIT_PROTOCOL` scrubbed — so behaviour is deterministic and no user
-//!   config, alias or pager can influence it. `upload-pack` additionally pins
-//!   `uploadpack.allowFilter=false` and `uploadpack.allow*SHA1InWant=false`,
-//!   keeping the clone transport default-deny.
+//!   `-c core.quotePath=false`, `GIT_TERMINAL_PROMPT=0`, global and system
+//!   config pointed at the null device, and `GIT_DIR`/`GIT_WORK_TREE`/
+//!   `GIT_PROTOCOL` removed, so no user config, alias or pager can change the
+//!   behaviour. `upload-pack` also pins `uploadpack.allowFilter=false` and
+//!   `uploadpack.allow*SHA1InWant=false`, so the clone transport denies by
+//!   default.
 //!
-//! A faithful port of the Python `gitweb.gitcmd`, with the same caps, timeouts
-//! and output parsers. Non-UTF-8 git output is decoded with the replacement
-//! policy ([`decode_output`], matching Python's `errors="replace"`), never
-//! rejected. Where the reference raises, this returns [`GitError`].
+//! A port of the Python `gitweb.gitcmd`, with the same caps, timeouts and
+//! output parsers. Non-UTF-8 output is decoded with replacement characters
+//! ([`decode_output`], like Python's `errors="replace"`), never rejected.
+//! Where the reference raises, this returns [`GitError`].
 //!
 //! # Conventions
 //!
 //! Python's keyword arguments with defaults become two functions: `f(…)` uses
 //! the reference's defaults and `f_with(…, opts)` takes them explicitly.
 //!
-//! # Documented divergences
+//! # Differences from the Python version
 //!
-//! * **Process-group kill.** The reference calls `os.killpg` to reap the whole
-//!   git subtree (`upload-pack` forks the CPU/RAM-heavy `pack-objects`). The
-//!   Rust standard library has no safe binding for `killpg`, and this crate is
-//!   `#![forbid(unsafe_code)]` with zero third-party dependencies, so
-//!   [`std::os::unix::process::CommandExt::process_group`] still makes every
-//!   long-running child its own group leader, teardown always SIGKILLs the
-//!   leader through [`std::process::Child::kill`], and the group signal is a
-//!   best-effort `kill -KILL -- -<pgid>` exec (silently skipped when `kill(1)`
-//!   is unavailable).
+//! * **Process-group kill.** The reference uses `os.killpg` to reap the whole
+//!   git subtree (`upload-pack` forks the heavy `pack-objects`). The standard
+//!   library has no safe `killpg`, and this crate forbids unsafe code and has
+//!   no dependencies, so every long-running child is its own group leader
+//!   ([`std::os::unix::process::CommandExt::process_group`]), teardown always
+//!   SIGKILLs the leader with [`std::process::Child::kill`], and the group
+//!   signal is a best-effort `kill -KILL -- -<pgid>` (skipped when `kill(1)`
+//!   is missing).
 //! * **No fork guard.** The reference guards its cached `cat-file` readers
-//!   against `os.fork()`; the Rust standard library cannot fork, so the pid
-//!   guard has no counterpart.
-//! * **No `atexit`.** [`close_catfiles`] exists and behaves identically but has
-//!   to be called by the server's shutdown path; at process exit the pipes
-//!   close anyway and `git cat-file --batch` exits on stdin EOF.
-//! * **`isdigit`.** The reference's numeric guards are `str.isdigit()`, which
-//!   accepts Unicode digits — and then *raises* on the digit-but-not-decimal
-//!   ones (`int("²")`). Here every such guard is ASCII-only, so those inputs
-//!   parse as "not a number" instead of crashing. Git never emits them.
-//! * **Non-UTF-8 directory names.** [`discover_repos`] decodes a directory name
-//!   lossily (the reference uses surrogateescape). Such a repository is
-//!   unreachable through a URL anyway, since [`valid_repo_name`] is ASCII-only.
-//! * **`read_blob` is split in two.** The reference's single `read_blob` takes
-//!   any string; here [`read_blob`] takes a validated [`SafePath`] (the URL
-//!   path) and [`read_blob_raw_path`] takes a *repository-derived* one (a name
-//!   read out of a tree listing, which git allows to contain any byte but NUL
-//!   and `/`). Both funnel through [`GitCatFile::spec_ok`], so neither can
-//!   desynchronise the shared batch stream — the split only makes the two
-//!   trust levels visible in the signature.
-//! * **The record parsers are public.** The reference keeps `_parse_*` private;
-//!   here [`parse_log_records`], [`parse_graph_records`], [`parse_tree_entries`],
-//!   [`parse_ref_records`], [`parse_commit_record`], [`parse_blame`],
-//!   [`parse_grep_matches`], [`parse_batch_header`] and [`parse_gitmodules`] are
-//!   exported so they can be exercised on captured git output without spawning
-//!   a process. They are pure: none of them can start one.
+//!   against `os.fork()`; Rust's standard library can't fork, so there's
+//!   nothing to guard.
+//! * **No `atexit`.** [`close_catfiles`] does the same job but has to be
+//!   called from the server's shutdown path; at process exit the pipes close
+//!   anyway and `git cat-file --batch` exits on EOF.
+//! * **`isdigit`.** The reference's numeric checks use `str.isdigit()`, which
+//!   accepts Unicode digits and then raises on the non-decimal ones
+//!   (`int("²")`). Here they are ASCII-only, so those inputs are just "not a
+//!   number". Git never emits them.
+//! * **Non-UTF-8 directory names.** [`discover_repos`] decodes a directory
+//!   name lossily (the reference uses surrogateescape). Such a repository
+//!   can't be reached by URL anyway: [`valid_repo_name`] is ASCII-only.
+//! * **`read_blob` is two functions.** [`read_blob`] takes a validated
+//!   [`SafePath`] (from the URL) and [`read_blob_raw_path`] a path read from
+//!   the repository itself (a tree entry, which may contain any byte but NUL
+//!   and `/`). Both go through [`GitCatFile::spec_ok`], so neither can
+//!   desynchronise the shared batch stream; the split just makes the two trust
+//!   levels visible.
+//! * **The record parsers are public.** [`parse_log_records`],
+//!   [`parse_graph_records`], [`parse_tree_entries`], [`parse_ref_records`],
+//!   [`parse_commit_record`], [`parse_blame`], [`parse_grep_matches`],
+//!   [`parse_batch_header`] and [`parse_gitmodules`] are exported so they can
+//!   be tested on captured git output. They are pure and never start a
+//!   process.
 //! * **Errors, not exceptions.** Where the reference raises `OSError` (git
-//!   missing, a file that will not open) this returns [`GitError::Failed`], so
-//!   every fallible entry point has one error type.
+//!   missing, a file that won't open) this returns [`GitError::Failed`], so
+//!   every fallible function has one error type.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -880,16 +877,14 @@ fn py_lower(s: &str) -> String {
 // Persistent `git cat-file` batch reader
 // --------------------------------------------------------------------------- //
 //
-// Rendering a single blob used to fork git four times: `cat-file -t` (type),
-// `cat-file -s` (size), one `cat-file -p` to peek for binary sniffing and a
-// second to read the body. This collapses all of that onto two long-lived
-// processes per repository — `--batch-check` for metadata/type lookups and
-// `--batch` for content — reused across requests.
+// Two long-lived processes per repository, reused across requests:
+// `--batch-check` for type and size lookups and `--batch` for content. One
+// blob no longer costs four forks.
 //
-// Safety is preserved: the same hardened argv/env as every other git call
-// (argv-only, no shell); object specs are still built only from validated
-// refs/paths; and the content reader keeps a hard output cap and early-kill, so
-// a blob larger than the requested cap is never drained or buffered.
+// Same safety as every other git call: the hardened argv and environment,
+// no shell, object specs built only from validated refs and paths. The
+// content reader keeps a hard output cap and stops early, so a blob larger
+// than the cap is never read in full.
 
 /// The identity/type/size triple `cat-file --batch-check` returns.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3541,8 +3536,8 @@ mod tests {
         assert_eq!(lines[2].author, "Bob");
         assert_eq!(lines[2].content, "\tindented content");
 
-        // Regression: every line is tested as a header, including file content.
-        // A multibyte character at byte 40 must not panic the header scan.
+        // Every line is tested as a possible header, file content included, so a
+        // multibyte character at byte 40 must not panic the header scan.
         let hostile = format!("\t{}\n{}\n", "é".repeat(40), "ありがとう".repeat(20));
         assert!(parse_blame(hostile.as_bytes()).is_empty());
         // A 40-hex prefix that is *not* a header (wrong field shapes) is skipped.
@@ -3675,11 +3670,9 @@ mod git_version_regression {
     use super::*;
 
     /// git renders a zero UTC offset as `+00:00` up to 2.43 and as the RFC 3339
-    /// `Z` on newer releases, so `commit_meta`'s output — a public contract that
-    /// reaches the JSON API, the CMS bridge and the Atom feeds — used to change
-    /// under the operator's git upgrade. `commit_meta_matches_python` failed for
-    /// exactly this reason on a newer host: expected `2020-01-02T00:00:00+00:00`,
-    /// got `2020-01-02T00:00:00Z`.
+    /// `Z` after it. `commit_meta`'s output is a public contract (the JSON API,
+    /// the CMS bridge, the Atom feeds), so it must not change with the installed
+    /// git: expect `2020-01-02T00:00:00+00:00` on every version.
     #[test]
     fn a_utc_commit_date_is_the_same_string_on_every_git_version() {
         assert_eq!(

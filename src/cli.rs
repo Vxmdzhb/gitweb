@@ -1,37 +1,35 @@
-//! The `gitweb` command-line entrypoint — a dependency-free port of the Python
-//! `python3 -m gitweb` CLI (`legacy-python/gitweb/gitweb/__main__.py`).
+//! The `gitweb` command-line entrypoint, a dependency-free port of the Python
+//! `python3 -m gitweb` CLI.
 //!
-//! `--root DIR` is the one required flag: it names the directory that *directly*
+//! `--root DIR` is the one required flag: the directory that *directly*
 //! contains the repositories to serve. Everything else tunes the read-only
-//! server — page sizes, streaming caps, the reverse-proxy mount prefix, the
-//! Git Smart-HTTP clone transport, and the optional HTTP Basic gate.
-//! `--hash-password USER` is the credential-generation helper: it prompts, prints
-//! a `USER:sha256$salt$hex` line for `--auth`/`--auth-file`, and exits without
+//! server: page sizes, streaming caps, the reverse-proxy mount prefix, the
+//! Git Smart-HTTP clone transport and the optional HTTP Basic gate.
+//! `--hash-password USER` generates a credential: it prompts, prints a
+//! `USER:sha256$salt$hex` line for `--auth`/`--auth-file`, and exits without
 //! starting a server.
 //!
-//! Argument parsing is hand-rolled in the style of
-//! `crates/websearch/src/bin/websearch.rs` (no `clap`, no third-party crate), and
-//! the whole binary is gated behind the crate's `net` feature via the `[[bin]]`
-//! `required-features`, so the default `gitweb` build stays a pure,
-//! zero-dependency library.
+//! Argument parsing is hand-written, like the other engines' (no `clap`, no
+//! third-party crate), and the binary needs the crate's `net` feature
+//! (`required-features` on the `[[bin]]`), so the default build stays a pure
+//! library with no dependencies.
 //!
 //! Exit codes match argparse: `0` success (or `--help`/`--version`), `1` a
 //! runtime failure, `2` a usage error (including a missing `--root` and a
 //! mistyped password).
 //!
-//! # Documented divergences
+//! # Differences from the Python version
 //!
-//! * **`--highlight` is accepted and is a no-op.** In Python it enables optional
-//!   Pygments syntax highlighting, falling back to escaped plaintext when
-//!   Pygments is absent — which is always the case in this zero-dependency
-//!   deployment, and is also the reference's own default. The flag is kept so a
-//!   deployment's command line ports across unchanged.
-//! * **`--port` is validated here**, not at bind time: a value outside
-//!   `0..=65535` is a usage error rather than a runtime one.
+//! * **`--highlight` is accepted and does nothing.** In Python it enables
+//!   optional Pygments highlighting, which falls back to escaped plain text
+//!   when Pygments is missing, as it always is here (and highlighting is off by
+//!   default there too). The flag is kept so existing command lines still work.
+//! * **`--port` is checked here**, not when binding: a value outside
+//!   `0..=65535` is a usage error.
 //! * **Password echo.** CPython uses `getpass`, which needs `termios`. This
-//!   binary asks `stty` (argv-only, never a shell) to turn echo off and restores
-//!   it afterwards; if `stty` is unavailable the password is read with echo on
-//!   and a warning is printed, rather than failing.
+//!   binary asks `stty` (argv-only, never a shell) to turn echo off and
+//!   restores it afterwards; without `stty` the password is read with echo on,
+//!   with a warning.
 use std::io::{BufRead, Write};
 use std::process::{Command, ExitCode, Stdio};
 
@@ -124,11 +122,9 @@ enum CliError {
 /// and exit codes — the point of routing them through one function rather than
 /// two copies of the parser that drift apart the first time a flag is added.
 pub fn run(args: impl Iterator<Item = String>) -> ExitCode {
-    // `--log-format` is handled before the subcommand parser so it works on
-    // every subcommand of every engine with one call site each, rather than
-    // being a flag an operator has to remember which subcommands happen to
-    // accept. It is removed from `argv`, so the parser below sees exactly the
-    // command line it saw before this flag existed.
+    // `--log-format` is handled before the subcommand parser, so it works on
+    // every subcommand, and it is removed from `argv`, so the parser below never
+    // sees it.
     let (log_format, argv) = match crawlcore::logfmt::take_format_flag(args.collect()) {
         Ok(v) => v,
         Err(msg) => {
