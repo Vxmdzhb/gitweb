@@ -54,6 +54,9 @@ use crate::gitcmd::{
     FileStream, GitError, GitStream, LfsPointer, Repo, SafePath, SafeQuery, SafeRef,
 };
 use crate::mailarchive;
+
+#[path = "api.rs"]
+mod api;
 use crate::markup::{parse_patch, render_markdown, render_readme};
 use crate::metrics::registry;
 use crate::views::{self, BlobView, Ctx, HistoryView, Readme, RefChoices, SearchView, TreeView};
@@ -331,6 +334,16 @@ pub enum Action {
     CommitPatch,
     /// `opensearch.xml` — the per-repo search descriptor.
     OpenSearch,
+    /// `summary.json` — the summary as JSON (see the `api` module).
+    SummaryJson,
+    /// `tree.json` — a directory listing as JSON.
+    TreeJson,
+    /// `blob.json` — one file as JSON.
+    BlobJson,
+    /// `log.json` — a page of the log as JSON.
+    LogJson,
+    /// `commit.json` — one commit and its diff as JSON.
+    CommitJson,
 }
 
 impl Action {
@@ -358,7 +371,25 @@ impl Action {
             Action::Patch => "patch",
             Action::CommitPatch => "commit.patch",
             Action::OpenSearch => "opensearch.xml",
+            Action::SummaryJson => "summary.json",
+            Action::TreeJson => "tree.json",
+            Action::BlobJson => "blob.json",
+            Action::LogJson => "log.json",
+            Action::CommitJson => "commit.json",
         }
+    }
+
+    /// True for the JSON API actions, whose errors are JSON too.
+    #[must_use]
+    pub fn is_json(self) -> bool {
+        matches!(
+            self,
+            Action::SummaryJson
+                | Action::TreeJson
+                | Action::BlobJson
+                | Action::LogJson
+                | Action::CommitJson
+        )
     }
 
     /// Parse a URL path segment into an action.
@@ -385,6 +416,11 @@ impl Action {
             Action::Patch,
             Action::CommitPatch,
             Action::OpenSearch,
+            Action::SummaryJson,
+            Action::TreeJson,
+            Action::BlobJson,
+            Action::LogJson,
+            Action::CommitJson,
         ]
         .into_iter()
         .find(|a| a.as_str() == token)
@@ -403,6 +439,8 @@ pub enum Route {
     Metrics,
     /// `/opensearch.xml` — the site-level search descriptor.
     OpensearchSite,
+    /// `/repos.json` — the repository list as JSON.
+    ReposJson,
     /// `/<repo>/` — the summary page.
     Summary {
         /// The URL repository id (still unvalidated).
@@ -487,6 +525,7 @@ impl Route {
                 "health" => return Route::Health,
                 "metrics" => return Route::Metrics,
                 "opensearch.xml" => return Route::OpensearchSite,
+                "repos.json" => return Route::ReposJson,
                 _ => {}
             }
         }
@@ -505,6 +544,16 @@ impl Route {
         }
     }
 
+    /// True for the JSON API routes.
+    #[must_use]
+    pub fn is_json(&self) -> bool {
+        match self {
+            Route::ReposJson => true,
+            Route::Action { action, .. } => action.is_json(),
+            _ => false,
+        }
+    }
+
     /// The metrics action label this route resolves to before any git work
     /// (`""` for the paths the reference never labels).
     #[must_use]
@@ -514,6 +563,7 @@ impl Route {
             Route::Health => "health",
             Route::Metrics => "metrics",
             Route::OpensearchSite => "opensearch-site",
+            Route::ReposJson => "repos.json",
             Route::Summary { .. } => "summary",
             Route::InfoRefs { .. } => "info-refs",
             Route::Action { action, .. } => action.as_str(),
@@ -1011,6 +1061,8 @@ impl Server {
         let mut action = "";
         let resp = match self.dispatch(req, &route, &mut action) {
             Ok(resp) => resp,
+            // The JSON API answers errors in JSON.
+            Err(err) if route.is_json() => self.json_error(&err),
             // An error page is an ordinary HTML response: it negotiates a
             // content coding exactly like a successful one.
             Err(err) => self.error_response(&err, req.accept_encoding),
@@ -1191,9 +1243,11 @@ impl Server {
         let params = params_of(req.target);
         *action = match route {
             // The labels the reference assigns before any repository resolution.
-            Route::Home | Route::Health | Route::Metrics | Route::OpensearchSite => {
-                route.action_label()
-            }
+            Route::Home
+            | Route::Health
+            | Route::Metrics
+            | Route::OpensearchSite
+            | Route::ReposJson => route.action_label(),
             _ => "",
         };
         match route {
@@ -1221,6 +1275,7 @@ impl Server {
                 None,
             )),
             Route::Home => self.handle_repo_list(req, &params),
+            Route::ReposJson => self.api_repos(),
             Route::ReceivePack { .. } => {
                 // With clone serving disabled every RPC endpoint simply 404s, as
                 // if it never existed; browsing is unaffected.
@@ -1311,6 +1366,11 @@ impl Server {
                 None,
                 None,
             )),
+            Action::SummaryJson => self.api_summary(req, repo),
+            Action::TreeJson => self.api_tree(repo, params),
+            Action::BlobJson => self.api_blob(repo, params),
+            Action::LogJson => self.api_log(repo, params),
+            Action::CommitJson => self.api_commit(repo, params),
         }
     }
 

@@ -4,6 +4,21 @@ Read-only no-JS git web frontend: argv-only (never shell) git plumbing, repo/log
 
 Part of the [astrx suite](https://github.com/Vxmdzhb/astrx-suite): one of its engines. The suite repository assembles every engine into the single `astrx` binary (`astrx gitweb`) and deploys it.
 
+## JSON API
+
+Everything the pages show is also available as JSON, for a client that renders
+it itself (the AstrX site's git module uses it):
+
+    /repos.json                      every repository
+    /<repo>/summary.json             default branch, branches, tags, latest commits, clone URL
+    /<repo>/tree.json?ref=&path=     a directory, with its README as text
+    /<repo>/blob.json?ref=&path=     one file as text (or binary: true)
+    /<repo>/log.json?ref=&page=      a page of the log
+    /<repo>/commit.json?id=          one commit with its diff
+
+It is read-only, takes the same validated refs and paths as the pages, and
+answers errors as `{"error": "..."}`.
+
 ## Build
 
     cargo build --release --features net   # the `gitweb` binary
